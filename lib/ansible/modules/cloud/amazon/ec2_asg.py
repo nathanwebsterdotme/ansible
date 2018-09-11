@@ -475,6 +475,20 @@ def describe_launch_configurations(connection, launch_config_name):
     pg = connection.get_paginator('describe_launch_configurations')
     return pg.paginate(LaunchConfigurationNames=[launch_config_name]).build_full_result()
 
+@AWSRetry.backoff(**backoff_params)
+def describe_launch_templates(connection, launch_template_name = None, launch_template_id = None):
+    if launch_template_name:
+        try:
+            lt = connection.describe_launch_templates(LaunchTemplateNames = [launch_template_name])
+            return lt
+        except:
+            module.fail_json(msg="No launch template found with name %s" % launch_template_name)
+    else:
+        try:
+            lt =  connection.describe_launch_templates(LaunchTemplateIds = [launch_template_id])
+            return lt
+        except:
+            module.fail_json(msg="No launch template found with id %s" % launch_template_id)
 
 @AWSRetry.backoff(**backoff_params)
 def create_asg(connection, **params):
@@ -539,7 +553,7 @@ def enforce_required_arguments():
         they cannot be mandatory arguments for the module, so we enforce
         them here '''
     missing_args = []
-    for arg in ('min_size', 'max_size', 'launch_config_name'):
+    for arg in ('min_size', 'max_size'):
         if module.params[arg] is None:
             missing_args.append(arg)
     if missing_args:
@@ -807,6 +821,7 @@ def create_autoscaling_group(connection):
     target_group_arns = module.params['target_group_arns']
     availability_zones = module.params['availability_zones']
     launch_config_name = module.params.get('launch_config_name')
+    launch_template = module.params.get('launch_template')
     min_size = module.params['min_size']
     max_size = module.params['max_size']
     placement_group = module.params.get('placement_group')
@@ -854,19 +869,13 @@ def create_autoscaling_group(connection):
         if not vpc_zone_identifier and not availability_zones:
             availability_zones = module.params['availability_zones'] = [zone['ZoneName'] for
                                                                         zone in ec2_connection.describe_availability_zones()['AvailabilityZones']]
+
         enforce_required_arguments()
-        try:
-            launch_configs = describe_launch_configurations(connection, launch_config_name)
-        except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-            module.fail_json(msg="Failed to describe launch configurations",
-                             exception=traceback.format_exc())
-        if len(launch_configs['LaunchConfigurations']) == 0:
-            module.fail_json(msg="No launch config found with name %s" % launch_config_name)
+
         if desired_capacity is None:
             desired_capacity = min_size
         ag = dict(
             AutoScalingGroupName=group_name,
-            LaunchConfigurationName=launch_configs['LaunchConfigurations'][0]['LaunchConfigurationName'],
             MinSize=min_size,
             MaxSize=max_size,
             DesiredCapacity=desired_capacity,
@@ -885,6 +894,39 @@ def create_autoscaling_group(connection):
             ag['LoadBalancerNames'] = load_balancers
         if target_group_arns:
             ag['TargetGroupARNs'] = target_group_arns
+        if launch_config_name:
+            try:
+                launch_configs = describe_launch_configurations(connection, launch_config_name)
+            except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+                module.fail_json(msg="Failed to describe launch configurations",
+                                 exception=traceback.format_exc())
+            if len(launch_configs['LaunchConfigurations']) == 0:
+                module.fail_json(msg="No launch config found with name %s" % launch_config_name)
+            ag['LaunchConfiguration'] = launch_configs['LaunchConfigurations'][0]['LaunchConfigurationName']
+        elif launch_template:
+            region, ec2_url, aws_connect_params = get_aws_connection_info(module, boto3=True)
+            ec2_connection = boto3_conn(module,
+                                        conn_type='client',
+                                        resource='ec2',
+                                        region=region,
+                                        endpoint=ec2_url,
+                                        **aws_connect_params)
+            if launch_template['LaunchTemplateName']:
+                ag['LaunchTemplate'] = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateName'])['LaunchTemplates'][0]
+            elif launch_template['LaunchTemplateId']:
+                ag['LaunchTemplate'] = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateId'])['LaunchTemplates'][0]
+            else:
+                module.fail_json(msg="One of LaunchTemplateName or LaunchTemplateId must be provided when using Launch Templates",
+                                exception=traceback.format_exc())
+            # Set the Launch Template version to the latest if no explicit value is provided.
+            try:
+                ag['LaunchTemplate']['Version'] = launch_template['Version']
+            except:
+                ag['LaunchTemplate']['Version'] = ag['LaunchTemplate']['LatestVersionNumber']
+# import pdb; pdb.set_trace()
+        else:
+            module.fail_json(msg="Either launch config or launch template must be provided",
+                            exception=traceback.format_exc())
 
         try:
             create_asg(connection, **ag)
@@ -1412,6 +1454,7 @@ def main():
             target_group_arns=dict(type='list'),
             availability_zones=dict(type='list'),
             launch_config_name=dict(type='str'),
+            launch_template=dict(type='dict'),
             min_size=dict(type='int'),
             max_size=dict(type='int'),
             placement_group=dict(type='str'),
