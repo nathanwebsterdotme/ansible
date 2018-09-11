@@ -911,25 +911,33 @@ def create_autoscaling_group(connection):
                                         region=region,
                                         endpoint=ec2_url,
                                         **aws_connect_params)
-            if launch_template['LaunchTemplateName']:
-                ag['LaunchTemplate'] = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateName'])['LaunchTemplates'][0]
-            elif launch_template['LaunchTemplateId']:
-                ag['LaunchTemplate'] = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateId'])['LaunchTemplates'][0]
-            else:
-                module.fail_json(msg="One of LaunchTemplateName or LaunchTemplateId must be provided when using Launch Templates",
-                                exception=traceback.format_exc())
             # Set the Launch Template version to the latest if no explicit value is provided.
             try:
-                ag['LaunchTemplate']['Version'] = launch_template['Version']
+                version = str(launch_template['Version'])
             except:
-                ag['LaunchTemplate']['Version'] = ag['LaunchTemplate']['LatestVersionNumber']
-# import pdb; pdb.set_trace()
+                version = str(ag['LaunchTemplate']['LatestVersionNumber'])
+            # Use either LaunchTemplateName or LaunchTemplateId.  Prioritise ID over Name
+            try:
+                if launch_template['LaunchTemplateId']:
+                    lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateId'])['LaunchTemplates'][0]
+                    ag['LaunchTemplate'] = {"LaunchTemplateId": lt['LaunchTemplateId'], "Version": version}
+            except:
+                if launch_template['LaunchTemplateName']:
+                    lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateName'])['LaunchTemplates'][0]
+                    ag['LaunchTemplate'] = {"LaunchTemplateName": lt['LaunchTemplateName'], "Version": version}
+                else:
+                    module.fail_json(msg="One of LaunchTemplateName or LaunchTemplateId must be provided when using Launch Templates",
+                                    exception=traceback.format_exc())
+
+
         else:
             module.fail_json(msg="Either launch config or launch template must be provided",
                             exception=traceback.format_exc())
 
+
         try:
             create_asg(connection, **ag)
+            import pdb; pdb.set_trace()
             if metrics_collection:
                 connection.enable_metrics_collection(AutoScalingGroupName=group_name, Granularity=metrics_granularity, Metrics=metrics_list)
 
