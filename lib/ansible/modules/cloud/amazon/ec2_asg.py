@@ -1132,8 +1132,9 @@ def create_autoscaling_group(connection):
                 else:
                     module.fail_json(msg="No launch template found matching %s" % launch_template,
                                     exception=traceback.format_exc())
-            # Prefer LaunchTemplateId over Name as it's more specific.  Can only provide one to update_asg.
+            # Prefer LaunchTemplateId over LaunchTemplateName as it's more specific.  Can only provide one to update_asg.
             ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['Version']) }
+
         # Use existing Launch Config / Launch Template attached to the ASG if none is provided.
         else:
             try:
@@ -1510,19 +1511,16 @@ def asg_exists(connection):
     as_group = describe_autoscaling_groups(connection, group_name)
     return bool(len(as_group))
 
-def validate_launchconfig_or_launchtemplate():
-    if module.params.get('launch_config_name'):
-        return
-    elif module.params.get('launch_template'):
-        try:
-            launch_template = module.params.get('launch_template')
-            if launch_template['Version'] and (launch_template['LaunchTemplateName'] or launch_template['LaunchTemplateId']):
-                return
-        except:
-            module.fail_json(msg="Incorrect launch_template object: %s" % module.params.get('launch_template'),
+def validate_launchtemplate():
+    launch_template = module.params.get('launch_template')
+    try:
+        if launch_template['Version'] and (launch_template['LaunchTemplateName'] or launch_template['LaunchTemplateId']):
+            return
+        elif (launch_template['LaunchTemplateName'] or launch_template['LaunchTemplateId']) and not launch_template['Version']:
+            module.fail_json(msg="Missing Version in launch template: %s" % module.params.get('launch_template'),
                              exception=traceback.format_exc())
-    else:
-        module.fail_json(msg="Either launch_config_name or launch_template must be provided",
+    except:
+        module.fail_json(msg="Incorrect launch_template format: %s" % module.params.get('launch_template'),
                          exception=traceback.format_exc())
 
 def main():
@@ -1588,8 +1586,9 @@ def main():
     replace_instances = module.params.get('replace_instances')
     replace_all_instances = module.params.get('replace_all_instances')
 
-    # Check a valid launch_config_name or launch_template exists early to avoid checking with each usage later
-    # validate_launchtemplate_object()
+    # Validate Launch Template if provided
+    if module.params.get('launch_template'):
+        validate_launchtemplate()
 
     region, ec2_url, aws_connect_params = get_aws_connection_info(module, boto3=True)
     connection = boto3_conn(module,
