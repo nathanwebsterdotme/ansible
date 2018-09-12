@@ -572,29 +572,17 @@ def get_properties(autoscaling_group):
     instance_facts = dict()
     autoscaling_group_instances = autoscaling_group.get('Instances')
     if autoscaling_group_instances:
+
         properties['instances'] = [i['InstanceId'] for i in autoscaling_group_instances]
         for i in autoscaling_group_instances:
-            instance_facts[i['InstanceId']] = {'health_status': i['HealthStatus'],
-                                               'lifecycle_state': i['LifecycleState']}
-
-
-
-            # TODO Test this!
-            import pdb; pdb.set_trace()
-
-
-            try:
-                lc = i.get('LaunchConfigurationName')
-                instance_facts[i['InstanceId']['launch_config_name']] = lc
-            except:
-                lc = i.get('LaunchTemplate')
-                instance_facts[i['InstanceId']['launch_template']] = lc
-
-
-
-
-
-
+            if i.get('LaunchConfigurationName'):
+                instance_facts[i['InstanceId']] = {'health_status': i['HealthStatus'],
+                                               'lifecycle_state': i['LifecycleState'],
+                                               'launch_config_name': i['LaunchConfigurationName']}
+            else:
+                instance_facts[i['InstanceId']] = {'health_status': i['HealthStatus'],
+                                               'lifecycle_state': i['LifecycleState'],
+                                               'launch_template': i['LaunchTemplate']}
             if i['HealthStatus'] == 'Healthy' and i['LifecycleState'] == 'InService':
                 properties['viable_instances'] += 1
             if i['HealthStatus'] == 'Healthy':
@@ -925,25 +913,23 @@ def create_autoscaling_group(connection):
                 module.fail_json(msg="No launch config found with name %s" % launch_config_name)
             ag['LaunchConfigurationName'] = launch_configs['LaunchConfigurations'][0]['LaunchConfigurationName']
         elif launch_template:
-            # Set the Launch Template version to the latest if no explicit value is provided.
-            try:
-                version = str(launch_template['Version'])
-            except:
-                version = str(ag['LaunchTemplate']['LatestVersionNumber'])
-            # Use either LaunchTemplateName or LaunchTemplateId.  Prioritise ID over Name
-            try:
-                if launch_template['LaunchTemplateId']:
+            if 'LaunchTemplateId' in launch_template:
+                try:
                     lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateId'])['LaunchTemplates'][0]
-                    ag['LaunchTemplate'] = {"LaunchTemplateId": lt['LaunchTemplateId'], "Version": version}
-            except:
-                if launch_template['LaunchTemplateName']:
-                    lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateName'])['LaunchTemplates'][0]
-                    ag['LaunchTemplate'] = {"LaunchTemplateName": lt['LaunchTemplateName'], "Version": version}
-                else:
-                    module.fail_json(msg="One of LaunchTemplateName or LaunchTemplateId must be provided when using Launch Templates",
+                except:
+                    module.fail_json(msg="No launch template found matching %s" % launch_template,
                                     exception=traceback.format_exc())
-
-
+            elif 'LaunchTemplateName' in launch_template:
+                try:
+                    lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateName'])['LaunchTemplates'][0]
+                except:
+                    module.fail_json(msg="No launch template found matching %s" % launch_template,
+                                    exception=traceback.format_exc())
+            else:
+                module.fail_json(msg="Need either 'LaunchTemplateName' or 'LaunchTemplateId' when creating an asg with launch_template. Got: %s" % launch_template,
+                                exception=traceback.format_exc())
+            # Prefer LaunchTemplateId over LaunchTemplateName as it's more specific.
+            ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['Version']) }
         else:
             module.fail_json(msg="Either launch config or launch template must be provided",
                             exception=traceback.format_exc())
@@ -1120,18 +1106,21 @@ def create_autoscaling_group(connection):
                 module.fail_json(msg="No launch config found with name %s" % launch_config_name)
             ag['LaunchConfigurationName'] = launch_configs['LaunchConfigurations'][0]['LaunchConfigurationName']
         elif launch_template:
-            try:
-                if launch_template['LaunchTemplateId']:
+            if 'LaunchTemplateId' in launch_template:
+                try:
                     lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateId'])['LaunchTemplates'][0]
-                else:
+                except:
                     module.fail_json(msg="No launch template found matching %s" % launch_template,
                                     exception=traceback.format_exc())
-            except:
-                if launch_template['LaunchTemplateName']:
+            elif 'LaunchTemplateName' in launch_template:
+                try:
                     lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateName'])['LaunchTemplates'][0]
-                else:
+                except:
                     module.fail_json(msg="No launch template found matching %s" % launch_template,
                                     exception=traceback.format_exc())
+            else:
+                module.fail_json(msg="Need either 'LaunchTemplateName' or 'LaunchTemplateId' when creating an asg with launch_template. Got: %s" % launch_template,
+                                exception=traceback.format_exc())
             # Prefer LaunchTemplateId over LaunchTemplateName as it's more specific.  Can only provide one to update_asg.
             ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['Version']) }
 
@@ -1259,24 +1248,18 @@ def replace(connection):
     max_size = module.params.get('max_size')
     min_size = module.params.get('min_size')
     desired_capacity = module.params.get('desired_capacity')
-    # Required to maintain the default value being set to 'true'
     launch_config_name = module.params.get('launch_config_name')
-
-
-
+    # Required to maintain the default value being set to 'true'
     if launch_config_name:
         lc_check = module.params.get('lc_check')
     else:
         lc_check = False
-
-
-
-
+    # Mirror above behaviour for Launch Templates
     launch_template = module.params.get('launch_template')
-
-
-
-
+    if launch_template:
+        lt_check = module.params.get('lt_check')
+    else:
+        lt_check = False
     replace_instances = module.params.get('replace_instances')
     replace_all_instances = module.params.get('replace_all_instances')
 
@@ -1296,10 +1279,17 @@ def replace(connection):
     # check to see if instances are replaceable if checking launch configs
 
 
-    new_instances, old_instances = get_instances_by_lc(props, lc_check, instances)
+
+    if launch_config_name:
+        new_instances, old_instances = get_instances_by_lc(props, lc_check, instances)
+    elif launch_template:
+        new_instances, old_instances = get_instances_by_lt(props, lt_check, instances)
+
+    # import pdb; pdb.set_trace()
+
     num_new_inst_needed = desired_capacity - len(new_instances)
 
-    if lc_check:
+    if lc_check or lt_check:
         if num_new_inst_needed == 0 and old_instances:
             module.debug("No new instances needed, but old instances are present. Removing old instances")
             terminate_batch(connection, old_instances, instances, True)
@@ -1380,21 +1370,57 @@ def get_instances_by_lc(props, lc_check, initial_instances):
 
     return new_instances, old_instances
 
+def get_instances_by_lt(props, lt_check, initial_instances):
 
-def list_purgeable_instances(props, lc_check, replace_instances, initial_instances):
+    # import pdb; pdb.set_trace()
+    new_instances = []
+    old_instances = []
+    # old instances are those that have the old launch template or version of the same launch template
+    if lt_check:
+        for i in props['instances']:
+            if props['instance_facts'][i]['launch_template'] == props['launch_template']:
+                new_instances.append(i)
+            else:
+                old_instances.append(i)
+
+    else:
+        module.debug("Comparing initial instances with current: %s" % initial_instances)
+        for i in props['instances']:
+            if i not in initial_instances:
+                new_instances.append(i)
+            else:
+                old_instances.append(i)
+    module.debug("New instances: %s, %s" % (len(new_instances), new_instances))
+    module.debug("Old instances: %s, %s" % (len(old_instances), old_instances))
+
+    return new_instances, old_instances
+
+
+def list_purgeable_instances(props, lc_check, lt_check, replace_instances, initial_instances):
     instances_to_terminate = []
     instances = (inst_id for inst_id in replace_instances if inst_id in props['instances'])
 
     # check to make sure instances given are actually in the given ASG
     # and they have a non-current launch config
-    if lc_check:
-        for i in instances:
-            if props['instance_facts'][i]['launch_config_name'] != props['launch_config_name']:
-                instances_to_terminate.append(i)
-    else:
-        for i in instances:
-            if i in initial_instances:
-                instances_to_terminate.append(i)
+    if module.params.get('launch_config_name'):
+        if lc_check:
+            for i in instances:
+                if props['instance_facts'][i]['launch_config_name'] != props['launch_config_name']:
+                    instances_to_terminate.append(i)
+        else:
+            for i in instances:
+                if i in initial_instances:
+                    instances_to_terminate.append(i)
+    elif module.params.get('launch_template'):
+        if lt_check:
+            for i in instances:
+                if props['instance_facts'][i]['launch_template'] != props['launch_template']:
+                    instances_to_terminate.append(i)
+        else:
+            for i in instances:
+                if i in initial_instances:
+                    instances_to_terminate.append(i)
+
     return instances_to_terminate
 
 
@@ -1404,6 +1430,7 @@ def terminate_batch(connection, replace_instances, initial_instances, leftovers=
     desired_capacity = module.params.get('desired_capacity')
     group_name = module.params.get('name')
     lc_check = module.params.get('lc_check')
+    lt_check = module.params.get('lt_check')
     decrement_capacity = False
     break_loop = False
 
@@ -1414,12 +1441,15 @@ def terminate_batch(connection, replace_instances, initial_instances, leftovers=
     props = get_properties(as_group)
     desired_size = as_group['MinSize']
 
-    new_instances, old_instances = get_instances_by_lc(props, lc_check, initial_instances)
+    if module.params.get('launch_config_name'):
+        new_instances, old_instances = get_instances_by_lc(props, lc_check, initial_instances)
+    if module.params.get('launch_template'):
+        new_instances, old_instances = get_instances_by_lt(props, lt_check, initial_instances)
     num_new_inst_needed = desired_capacity - len(new_instances)
 
     # check to make sure instances given are actually in the given ASG
     # and they have a non-current launch config
-    instances_to_terminate = list_purgeable_instances(props, lc_check, replace_instances, initial_instances)
+    instances_to_terminate = list_purgeable_instances(props, lc_check, lt_check, replace_instances, initial_instances)
 
     module.debug("new instances needed: %s" % num_new_inst_needed)
     module.debug("new instances: %s" % new_instances)
@@ -1514,13 +1544,10 @@ def asg_exists(connection):
 def validate_launchtemplate():
     launch_template = module.params.get('launch_template')
     try:
-        if launch_template['Version'] and (launch_template['LaunchTemplateName'] or launch_template['LaunchTemplateId']):
+        if launch_template['Version']:
             return
-        elif (launch_template['LaunchTemplateName'] or launch_template['LaunchTemplateId']) and not launch_template['Version']:
-            module.fail_json(msg="Missing Version in launch template: %s" % module.params.get('launch_template'),
-                             exception=traceback.format_exc())
     except:
-        module.fail_json(msg="Incorrect launch_template format: %s" % module.params.get('launch_template'),
+        module.fail_json(msg="Missing Version in launch template: %s" % module.params.get('launch_template'),
                          exception=traceback.format_exc())
 
 def main():
@@ -1542,6 +1569,7 @@ def main():
             replace_all_instances=dict(type='bool', default=False),
             replace_instances=dict(type='list', default=[]),
             lc_check=dict(type='bool', default=True),
+            lt_check=dict(type='bool', default=True),
             wait_timeout=dict(type='int', default=300),
             state=dict(default='present', choices=['present', 'absent']),
             tags=dict(type='list', default=[]),
