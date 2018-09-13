@@ -506,7 +506,6 @@ def describe_launch_configurations(connection, launch_config_name):
 
 @AWSRetry.backoff(**backoff_params)
 def describe_launch_templates(connection, launch_template):
-    import pdb; pdb.set_trace()
     if launch_template['launch_template_id'] is not None:
         lt = connection.describe_launch_templates(LaunchTemplateIds = [launch_template['launch_template_id']])
         return lt
@@ -1111,7 +1110,6 @@ def create_autoscaling_group(connection):
             HealthCheckType=health_check_type,
             DefaultCooldown=default_cooldown,
             TerminationPolicies=termination_policies)
-        import pdb; pdb.set_trace()
         # Validate the Launch Config / Launch Template provided exists.
         if launch_config_name:
             try:
