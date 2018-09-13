@@ -24,7 +24,7 @@ module: ec2_asg
 short_description: Create or delete AWS Autoscaling Groups
 description:
   - Can create or delete AWS Autoscaling Groups
-  - Works with the ec2_lc module to manage Launch Configurations
+  - Can be used with the ec2_lc module to manage Launch Configurations
 version_added: "1.6"
 author: "Gareth Rushgrove (@garethr)"
 requirements: [ "boto3", "botocore" ]
@@ -51,8 +51,12 @@ options:
   launch_config_name:
     description:
       - Name of the Launch configuration to use for the group. See the ec2_lc module for managing these.
-        If unspecified then the current group value will be used.
-    required: true
+        If unspecified then the current group value will be used.  One of launch_config_name or launch_template must be provided.
+  launch_template:
+    description:
+      - Dictionary of Launch Template to use for the group.  A 'version' and one of 'launch_template_name' or 'launch_template_id' must be provided.
+        One of launch_config_name or launch_template must be used.
+    version_added: "2.8"
   min_size:
     description:
       - Minimum number of instances in group, if unspecified then the current group value will be used.
@@ -86,6 +90,11 @@ options:
     description:
       - Check to make sure instances that are being replaced with replace_instances do not already have the current launch_config.
     version_added: "1.8"
+    default: 'yes'
+  lt_check:
+    description:
+      - Check to make sure instances that are being replaced with replace_instances do not already have the current launch_template or launch_template version.
+    version_added: "2.8"
     default: 'yes'
   vpc_zone_identifier:
     description:
@@ -182,7 +191,7 @@ extends_documentation_fragment:
 """
 
 EXAMPLES = '''
-# Basic configuration
+# Basic configuration with Launch Configuration
 
 - ec2_asg:
     name: special
@@ -245,6 +254,26 @@ EXAMPLES = '''
     max_size: 5
     desired_capacity: 5
     region: us-east-1
+
+# Basic Configuration with Launch Template
+
+- ec2_asg:
+    name: special
+    load_balancers: [ 'lb1', 'lb2' ]
+    availability_zones: [ 'eu-west-1a', 'eu-west-1b' ]
+    launch_template:
+        Version: '1'
+        LaunchTemplateName: 'lt-example'
+        LaunchTemplateId: 'lt-123456'
+    min_size: 1
+    max_size: 10
+    desired_capacity: 5
+    vpc_zone_identifier: [ 'subnet-abcd1234', 'subnet-1a2b3c4d' ]
+    tags:
+      - environment: production
+        propagate_at_launch: no
+
+
 '''
 
 RETURN = '''
@@ -476,19 +505,15 @@ def describe_launch_configurations(connection, launch_config_name):
     return pg.paginate(LaunchConfigurationNames=[launch_config_name]).build_full_result()
 
 @AWSRetry.backoff(**backoff_params)
-def describe_launch_templates(connection, launch_template_name = None, launch_template_id = None):
-    if launch_template_name:
-        try:
-            lt = connection.describe_launch_templates(LaunchTemplateNames = [launch_template_name])
-            return lt
-        except:
-            module.fail_json(msg="No launch template found with name %s" % launch_template_name)
+def describe_launch_templates(connection, launch_template):
+    import pdb; pdb.set_trace()
+    if launch_template['launch_template_id'] is not None:
+        lt = connection.describe_launch_templates(LaunchTemplateIds = [launch_template['launch_template_id']])
+        return lt
     else:
-        try:
-            lt =  connection.describe_launch_templates(LaunchTemplateIds = [launch_template_id])
-            return lt
-        except:
-            module.fail_json(msg="No launch template found with id %s" % launch_template_id)
+        lt = connection.describe_launch_templates(LaunchTemplateNames = [launch_template['launch_template_name']])
+        return lt
+
 
 @AWSRetry.backoff(**backoff_params)
 def create_asg(connection, **params):
@@ -913,23 +938,16 @@ def create_autoscaling_group(connection):
                 module.fail_json(msg="No launch config found with name %s" % launch_config_name)
             ag['LaunchConfigurationName'] = launch_configs['LaunchConfigurations'][0]['LaunchConfigurationName']
         elif launch_template:
-            if 'LaunchTemplateId' in launch_template:
-                try:
-                    lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateId'])['LaunchTemplates'][0]
-                except:
-                    module.fail_json(msg="No launch template found matching %s" % launch_template,
-                                    exception=traceback.format_exc())
-            elif 'LaunchTemplateName' in launch_template:
-                try:
-                    lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateName'])['LaunchTemplates'][0]
-                except:
-                    module.fail_json(msg="No launch template found matching %s" % launch_template,
-                                    exception=traceback.format_exc())
-            else:
-                module.fail_json(msg="Need either 'LaunchTemplateName' or 'LaunchTemplateId' when creating an asg with launch_template. Got: %s" % launch_template,
+            try:
+                lt = describe_launch_templates(ec2_connection, launch_template)['LaunchTemplates'][0]
+            except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+                module.fail_json(msg="Failed to describe launch templates",
+                                exception=traceback.format_exc())
+            if not lt:
+                module.fail_json(msg="No launch template found matching %s" % launch_template,
                                 exception=traceback.format_exc())
             # Prefer LaunchTemplateId over LaunchTemplateName as it's more specific.
-            ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['Version']) }
+            ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['version']) }
         else:
             module.fail_json(msg="Either launch config or launch template must be provided",
                             exception=traceback.format_exc())
@@ -1086,7 +1104,6 @@ def create_autoscaling_group(connection):
             desired_capacity = as_group['DesiredCapacity']
         ag = dict(
             AutoScalingGroupName=group_name,
-            # LaunchConfigurationName=launch_configs['LaunchConfigurations'][0]['LaunchConfigurationName'],
             MinSize=min_size,
             MaxSize=max_size,
             DesiredCapacity=desired_capacity,
@@ -1094,7 +1111,7 @@ def create_autoscaling_group(connection):
             HealthCheckType=health_check_type,
             DefaultCooldown=default_cooldown,
             TerminationPolicies=termination_policies)
-
+        import pdb; pdb.set_trace()
         # Validate the Launch Config / Launch Template provided exists.
         if launch_config_name:
             try:
@@ -1106,23 +1123,16 @@ def create_autoscaling_group(connection):
                 module.fail_json(msg="No launch config found with name %s" % launch_config_name)
             ag['LaunchConfigurationName'] = launch_configs['LaunchConfigurations'][0]['LaunchConfigurationName']
         elif launch_template:
-            if 'LaunchTemplateId' in launch_template:
-                try:
-                    lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateId'])['LaunchTemplates'][0]
-                except:
-                    module.fail_json(msg="No launch template found matching %s" % launch_template,
-                                    exception=traceback.format_exc())
-            elif 'LaunchTemplateName' in launch_template:
-                try:
-                    lt = describe_launch_templates(ec2_connection, launch_template['LaunchTemplateName'])['LaunchTemplates'][0]
-                except:
-                    module.fail_json(msg="No launch template found matching %s" % launch_template,
-                                    exception=traceback.format_exc())
-            else:
-                module.fail_json(msg="Need either 'LaunchTemplateName' or 'LaunchTemplateId' when creating an asg with launch_template. Got: %s" % launch_template,
+            try:
+                lt = describe_launch_templates(ec2_connection, launch_template)['LaunchTemplates'][0]
+            except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+                module.fail_json(msg="Failed to describe launch templates",
                                 exception=traceback.format_exc())
-            # Prefer LaunchTemplateId over LaunchTemplateName as it's more specific.  Can only provide one to update_asg.
-            ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['Version']) }
+            if not lt:
+                module.fail_json(msg="No launch template found matching %s" % launch_template,
+                                exception=traceback.format_exc())
+            # Prefer LaunchTemplateId over LaunchTemplateName as it's more specific.
+            ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['version']) }
 
         # Use existing Launch Config / Launch Template attached to the ASG if none is provided.
         else:
@@ -1132,7 +1142,7 @@ def create_autoscaling_group(connection):
             except:
                 launch_template = as_group['LaunchTemplate']
                 # Prefer LaunchTemplateId over Name as it's more specific.  Can only provide one to update_asg.
-                ag['LaunchTemplate'] = { "LaunchTemplateId": launch_template['LaunchTemplateId'], "Version": launch_template['Version'] }
+                ag['LaunchTemplate'] = { "LaunchTemplateId": launch_template['LaunchTemplateId'], "Version": launch_template['version'] }
 
         if availability_zones:
             ag['AvailabilityZones'] = availability_zones
@@ -1277,15 +1287,10 @@ def replace(connection):
     if replace_instances:
         instances = replace_instances
     # check to see if instances are replaceable if checking launch configs
-
-
-
     if launch_config_name:
         new_instances, old_instances = get_instances_by_lc(props, lc_check, instances)
     elif launch_template:
         new_instances, old_instances = get_instances_by_lt(props, lt_check, instances)
-
-    # import pdb; pdb.set_trace()
 
     num_new_inst_needed = desired_capacity - len(new_instances)
 
@@ -1372,7 +1377,6 @@ def get_instances_by_lc(props, lc_check, initial_instances):
 
 def get_instances_by_lt(props, lt_check, initial_instances):
 
-    # import pdb; pdb.set_trace()
     new_instances = []
     old_instances = []
     # old instances are those that have the old launch template or version of the same launch template
@@ -1544,7 +1548,7 @@ def asg_exists(connection):
 def validate_launchtemplate():
     launch_template = module.params.get('launch_template')
     try:
-        if launch_template['Version']:
+        if launch_template['version']:
             return
     except:
         module.fail_json(msg="Missing Version in launch template: %s" % module.params.get('launch_template'),
@@ -1559,7 +1563,14 @@ def main():
             target_group_arns=dict(type='list'),
             availability_zones=dict(type='list'),
             launch_config_name=dict(type='str'),
-            launch_template=dict(type='dict'),
+            launch_template=dict(type='dict',
+                default={},
+                options=dict(
+                    version=dict(type='str', required=True),
+                    launch_template_name=dict(type='str'),
+                    launch_template_id=dict(type='str'),
+                ),
+            ),
             min_size=dict(type='int'),
             max_size=dict(type='int'),
             placement_group=dict(type='str'),
