@@ -1356,7 +1356,10 @@ def get_instances_by_lc(props, lc_check, initial_instances):
     # old instances are those that have the old launch config
     if lc_check:
         for i in props['instances']:
-            if props['instance_facts'][i]['launch_config_name'] == props['launch_config_name']:
+            # Check if migrating from launch_template to launch_config first
+            if 'launch_template' in props['instance_facts'][i]:
+                old_instances.append(i)
+            elif props['instance_facts'][i]['launch_config_name'] == props['launch_config_name']:
                 new_instances.append(i)
             else:
                 old_instances.append(i)
@@ -1375,17 +1378,18 @@ def get_instances_by_lc(props, lc_check, initial_instances):
 
 
 def get_instances_by_lt(props, lt_check, initial_instances):
-
     new_instances = []
     old_instances = []
-    # old instances are those that have the old launch template or version of the same launch template
+    # old instances are those that have the old launch template or version of the same launch templatec
     if lt_check:
         for i in props['instances']:
-            if props['instance_facts'][i]['launch_template'] == props['launch_template']:
+            # Check if migrating from launch_config_name to launch_template_name first
+            if 'launch_config_name' in props['instance_facts'][i]:
+                old_instances.append(i)
+            elif props['instance_facts'][i]['launch_template'] == props['launch_template']:
                 new_instances.append(i)
             else:
                 old_instances.append(i)
-
     else:
         module.debug("Comparing initial instances with current: %s" % initial_instances)
         for i in props['instances']:
@@ -1402,13 +1406,14 @@ def get_instances_by_lt(props, lt_check, initial_instances):
 def list_purgeable_instances(props, lc_check, lt_check, replace_instances, initial_instances):
     instances_to_terminate = []
     instances = (inst_id for inst_id in replace_instances if inst_id in props['instances'])
-
     # check to make sure instances given are actually in the given ASG
     # and they have a non-current launch config
     if module.params.get('launch_config_name'):
         if lc_check:
             for i in instances:
-                if props['instance_facts'][i]['launch_config_name'] != props['launch_config_name']:
+                if 'launch_template' in props['instance_facts'][i]:
+                    instances_to_terminate.append(i)
+                elif props['instance_facts'][i]['launch_config_name'] != props['launch_config_name']:
                     instances_to_terminate.append(i)
         else:
             for i in instances:
@@ -1417,7 +1422,9 @@ def list_purgeable_instances(props, lc_check, lt_check, replace_instances, initi
     elif module.params.get('launch_template'):
         if lt_check:
             for i in instances:
-                if props['instance_facts'][i]['launch_template'] != props['launch_template']:
+                if 'launch_config_name' in props['instance_facts'][i]:
+                    instances_to_terminate.append(i)
+                elif props['instance_facts'][i]['launch_template'] != props['launch_template']:
                     instances_to_terminate.append(i)
         else:
             for i in instances:
@@ -1565,7 +1572,7 @@ def main():
             availability_zones=dict(type='list'),
             launch_config_name=dict(type='str'),
             launch_template=dict(type='dict',
-                                 default={},
+                                 default=None,
                                  options=dict(
                                      version=dict(type='str', required=True),
                                      launch_template_name=dict(type='str'),
@@ -1627,7 +1634,7 @@ def main():
     replace_all_instances = module.params.get('replace_all_instances')
 
     # Validate Launch Template if provided
-    if module.params.get('launch_template'):
+    if module.params.get('launch_template') is not None:
         validate_launchtemplate()
 
     region, ec2_url, aws_connect_params = get_aws_connection_info(module, boto3=True)
