@@ -262,9 +262,9 @@ EXAMPLES = '''
     load_balancers: [ 'lb1', 'lb2' ]
     availability_zones: [ 'eu-west-1a', 'eu-west-1b' ]
     launch_template:
-        Version: '1'
-        LaunchTemplateName: 'lt-example'
-        LaunchTemplateId: 'lt-123456'
+        version: '1'
+        launch_template_name: 'lt-example'
+        launch_template_id: 'lt-123456'
     min_size: 1
     max_size: 10
     desired_capacity: 5
@@ -504,13 +504,14 @@ def describe_launch_configurations(connection, launch_config_name):
     pg = connection.get_paginator('describe_launch_configurations')
     return pg.paginate(LaunchConfigurationNames=[launch_config_name]).build_full_result()
 
+
 @AWSRetry.backoff(**backoff_params)
 def describe_launch_templates(connection, launch_template):
     if launch_template['launch_template_id'] is not None:
-        lt = connection.describe_launch_templates(LaunchTemplateIds = [launch_template['launch_template_id']])
+        lt = connection.describe_launch_templates(LaunchTemplateIds=[launch_template['launch_template_id']])
         return lt
     else:
-        lt = connection.describe_launch_templates(LaunchTemplateNames = [launch_template['launch_template_name']])
+        lt = connection.describe_launch_templates(LaunchTemplateNames=[launch_template['launch_template_name']])
         return lt
 
 
@@ -601,12 +602,12 @@ def get_properties(autoscaling_group):
         for i in autoscaling_group_instances:
             if i.get('LaunchConfigurationName'):
                 instance_facts[i['InstanceId']] = {'health_status': i['HealthStatus'],
-                                               'lifecycle_state': i['LifecycleState'],
-                                               'launch_config_name': i['LaunchConfigurationName']}
+                                                   'lifecycle_state': i['LifecycleState'],
+                                                   'launch_config_name': i['LaunchConfigurationName']}
             else:
                 instance_facts[i['InstanceId']] = {'health_status': i['HealthStatus'],
-                                               'lifecycle_state': i['LifecycleState'],
-                                               'launch_template': i['LaunchTemplate']}
+                                                   'lifecycle_state': i['LifecycleState'],
+                                                   'launch_template': i['LaunchTemplate']}
             if i['HealthStatus'] == 'Healthy' and i['LifecycleState'] == 'InService':
                 properties['viable_instances'] += 1
             if i['HealthStatus'] == 'Healthy':
@@ -941,16 +942,15 @@ def create_autoscaling_group(connection):
                 lt = describe_launch_templates(ec2_connection, launch_template)['LaunchTemplates'][0]
             except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
                 module.fail_json(msg="Failed to describe launch templates",
-                                exception=traceback.format_exc())
+                                 exception=traceback.format_exc())
             if not lt:
                 module.fail_json(msg="No launch template found matching %s" % launch_template,
-                                exception=traceback.format_exc())
+                                 exception=traceback.format_exc())
             # Prefer LaunchTemplateId over LaunchTemplateName as it's more specific.
-            ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['version']) }
+            ag['LaunchTemplate'] = {"LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['version'])}
         else:
             module.fail_json(msg="Either launch config or launch template must be provided",
-                            exception=traceback.format_exc())
-
+                             exception=traceback.format_exc())
 
         try:
             create_asg(connection, **ag)
@@ -1125,12 +1125,12 @@ def create_autoscaling_group(connection):
                 lt = describe_launch_templates(ec2_connection, launch_template)['LaunchTemplates'][0]
             except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
                 module.fail_json(msg="Failed to describe launch templates",
-                                exception=traceback.format_exc())
+                                 exception=traceback.format_exc())
             if not lt:
                 module.fail_json(msg="No launch template found matching %s" % launch_template,
-                                exception=traceback.format_exc())
+                                 exception=traceback.format_exc())
             # Prefer LaunchTemplateId over LaunchTemplateName as it's more specific.
-            ag['LaunchTemplate'] = { "LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['version']) }
+            ag['LaunchTemplate'] = {"LaunchTemplateId": lt['LaunchTemplateId'], "Version": str(launch_template['version'])}
 
         # Use existing Launch Config / Launch Template attached to the ASG if none is provided.
         else:
@@ -1140,7 +1140,7 @@ def create_autoscaling_group(connection):
             except:
                 launch_template = as_group['LaunchTemplate']
                 # Prefer LaunchTemplateId over Name as it's more specific.  Can only provide one to update_asg.
-                ag['LaunchTemplate'] = { "LaunchTemplateId": launch_template['LaunchTemplateId'], "Version": launch_template['version'] }
+                ag['LaunchTemplate'] = {"LaunchTemplateId": launch_template['LaunchTemplateId'], "Version": launch_template['version']}
 
         if availability_zones:
             ag['AvailabilityZones'] = availability_zones
@@ -1373,6 +1373,7 @@ def get_instances_by_lc(props, lc_check, initial_instances):
 
     return new_instances, old_instances
 
+
 def get_instances_by_lt(props, lt_check, initial_instances):
 
     new_instances = []
@@ -1543,6 +1544,7 @@ def asg_exists(connection):
     as_group = describe_autoscaling_groups(connection, group_name)
     return bool(len(as_group))
 
+
 def validate_launchtemplate():
     launch_template = module.params.get('launch_template')
     try:
@@ -1551,6 +1553,7 @@ def validate_launchtemplate():
     except:
         module.fail_json(msg="Missing Version in launch template: %s" % module.params.get('launch_template'),
                          exception=traceback.format_exc())
+
 
 def main():
     argument_spec = ec2_argument_spec()
@@ -1562,13 +1565,13 @@ def main():
             availability_zones=dict(type='list'),
             launch_config_name=dict(type='str'),
             launch_template=dict(type='dict',
-                default={},
-                options=dict(
-                    version=dict(type='str', required=True),
-                    launch_template_name=dict(type='str'),
-                    launch_template_id=dict(type='str'),
-                ),
-            ),
+                                 default={},
+                                 options=dict(
+                                     version=dict(type='str', required=True),
+                                     launch_template_name=dict(type='str'),
+                                     launch_template_id=dict(type='str'),
+                                 ),
+                                 ),
             min_size=dict(type='int'),
             max_size=dict(type='int'),
             placement_group=dict(type='str'),
