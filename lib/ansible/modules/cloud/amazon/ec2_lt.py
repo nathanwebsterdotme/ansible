@@ -406,20 +406,24 @@ def describe_launch_template_version(connection, launch_template_name, version_n
     try:
         lt_version = connection.describe_launch_template_versions(LaunchTemplateName=launch_template_name, Versions=[str(version_number)])
         return lt_version['LaunchTemplateVersions'][0]
-    except botocore.exceptions.BotoCoreError or botocore.exceptions.ClientError as e:
+    except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
         module.fail_json(msg="Failed to to describe launch template version number: %s" % version_number)
 
 @AWSRetry.backoff(**backoff_params)
 def create_launch_template(connection, **params):
     """ Creates a launch template """
-    connection.create_launch_template(**params)
+    try:
+        connection.create_launch_template(**params)
+    except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
+        module.fail_json(msg="Failed to to create launch template", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
 
 @AWSRetry.backoff(**backoff_params)
 def create_launch_template_version(connection, **params):
     """ Creates a new version of an existing launch template """
-    connection.create_launch_template_version(**params)
-
-
+    try:
+        connection.create_launch_template_version(**params)
+    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+        module.fail_json(msg="Failed to to create launch template version", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
     # try:
     #     lt = connection.describe_launch_templates(LaunchTemplateNames=[launch_template_name])
     #     return lt['LaunchTemplates'][0]     # Launch Template names are unique so we're safe to return the first entry
@@ -491,11 +495,12 @@ def create_launch_template_version(connection, **params):
 #     return return_object
 
 
-
 def create_launch_template_and_versions(connection):
     launch_template = dict()
-    changed = False
-    result = {}
+    results = dict(
+        changed=False,
+        results=dict()
+    )
 
     name = module.params.get('name')
 
@@ -525,38 +530,43 @@ def create_launch_template_and_versions(connection):
         launch_template['LaunchTemplateData']['CreditSpecification'] = {"CpuCredits": cpu_credits}
 
     lt = describe_launch_templates(connection, name)
-
     import pdb; pdb.set_trace();
-
     # Create New Launch Template
     if lt is None:
         if launch_template['LaunchTemplateData'] is not None:
             create_launch_template(connection, **launch_template)
             lt = describe_launch_templates(connection, name)
-            changed=True
+            results['changed'] = True
         else:
             module.fail_json(msg="Launch template data missing.")
-
-        result = (dict((k, v) for k, v in lt.items() if k is not 'CreateTime'))
-
-        result['CreateTime'] = to_text(lt.get('CreateTime'))
 
 
     # Create new Version for existing Launch Template
     else:
-        if launch_template['LaunchTemplateData'] is not None:
+        if (launch_template['LaunchTemplateData'] and launch_template['LaunchTemplateData'] is not None):
         # Diff the existing latest version and our args to ensure idempotence
             lt_latest_version = describe_launch_template_version(connection, name, lt['LatestVersionNumber'])
 
             if lt_latest_version['LaunchTemplateData'] != launch_template['LaunchTemplateData']:
                 create_launch_template_version(connection, **launch_template)
                 lt = describe_launch_templates(connection, name)
-                changed=True
-            else:
-                launch_template = lt_latest_version
+                results['changed'] = True
 
-        else:
-            module.fail_json(msg="Launch template data missing.")
+
+    lt = describe_launch_templates(connection, name)
+    lt_latest_version = describe_launch_template_version(connection, name, lt['LatestVersionNumber'])
+
+    results['results']['id'] = lt['LaunchTemplateId']
+    results['results']['name'] = lt['LaunchTemplateName']
+    results['results']['create_time'] = to_text(lt['CreateTime'])
+    results['results']['default_version_number'] = lt['DefaultVersionNumber']
+    results['results']['latest_version_number'] = lt['LatestVersionNumber']
+    results['results']['latest_version'] = dict(
+        launch_template_data = lt_latest_version['LaunchTemplateData'],
+        create_time = to_text(lt_latest_version['CreateTime'])
+    )
+
+
 
         # import pdb; pdb.set_trace();
         # result = dict((k, v) for k, v in lt.items())
@@ -567,7 +577,9 @@ def create_launch_template_and_versions(connection):
 
 
 
-    return changed, launch_template
+
+
+    return results
 
 
     # Test if launch template already exists:
@@ -788,12 +800,12 @@ def main():
     state = module.params.get('state')
 
     if state == 'present':
-        changed, launch_template_data = create_launch_template_and_versions(connection)
+        results = create_launch_template_and_versions(connection)
     #TODO: elif state == 'absent':
     #     delete_launch_config(connection, module)
 
 
-    module.exit_json(changed=changed, **launch_template_data)
+    module.exit_json(changed=results['changed'], results=results['results'])
 
 if __name__ == '__main__':
     main()
