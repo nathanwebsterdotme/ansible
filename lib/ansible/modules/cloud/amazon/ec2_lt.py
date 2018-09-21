@@ -391,119 +391,95 @@ backoff_params = dict(tries=10, delay=3, backoff=1.5)
 
 
 @AWSRetry.backoff(**backoff_params)
-def describe_launch_templates(connection, launch_template_name):
-    """ Checks for existing launch templates matching the name and returns a dict of it if found, or none if not found """
-    try:
-        lt = connection.describe_launch_templates(LaunchTemplateNames=[launch_template_name])
-        return lt['LaunchTemplates'][0]     # Launch Template names are unique so we're safe to return the first entry
-    except botocore.exceptions.ClientError:
-        return None
-    except botocore.exceptions.BotoCoreError as e:
-        module.fail_json(msg="Failed to to describe launch templates", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
-
-def describe_launch_template_version(connection, launch_template_name, version_number):
-    """ Describes a specific version of a launch template """
-    try:
-        lt_version = connection.describe_launch_template_versions(LaunchTemplateName=launch_template_name, Versions=[str(version_number)])
-        return lt_version['LaunchTemplateVersions'][0]
-    except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
-        module.fail_json(msg="Failed to to describe launch template version number: %s" % version_number)
-
-@AWSRetry.backoff(**backoff_params)
-def create_launch_template(connection, **params):
+def create_lt(connection, **params):
     """ Creates a launch template """
     try:
         connection.create_launch_template(**params)
     except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
-        module.fail_json(msg="Failed to to create launch template", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
+        module.fail_json(msg="Failed to create launch template", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
+
 
 @AWSRetry.backoff(**backoff_params)
-def create_launch_template_version(connection, **params):
+def create_lt_version(connection, **params):
     """ Creates a new version of an existing launch template """
     try:
         connection.create_launch_template_version(**params)
     except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
-        module.fail_json(msg="Failed to to create launch template version", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
-    # try:
-    #     lt = connection.describe_launch_templates(LaunchTemplateNames=[launch_template_name])
-    #     return lt['LaunchTemplates'][0]     # Launch Template names are unique so we're safe to return the first entry
-    # except botocore.exceptions.ClientError:
-    #     return None
-    # except botocore.exceptions.BotoCoreError as e:
-    #     module.fail_json(msg="Failed to to describe launch templates", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
+        module.fail_json(msg="Failed to create launch template version", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
 
 
-
-# def create_block_device_meta(module, volume):
-#     # device_type has been used historically to represent volume_type,
-#     # however ec2_vol uses volume_type, as does the BlockDeviceType, so
-#     # we add handling for either/or but not both
-#     if 'device_type' in volume:
-#         if 'volume_type' in volume:
-#             module.fail_json(msg='device_type is a deprecated name for volume_type. '
-#                              'Do not use both device_type and volume_type')
-#         else:
-#             module.deprecate('device_type is deprecated for block devices - use volume_type instead',
-#                              version=2.9)
-#
-#     # rewrite device_type key to volume_type
-#     if 'device_type' in volume:
-#         volume['volume_type'] = volume.pop('device_type')
-#
-#     if 'snapshot' not in volume and 'ephemeral' not in volume and 'no_device' not in volume:
-#         if 'volume_size' not in volume:
-#             module.fail_json(msg='Size must be specified when creating a new volume or modifying the root volume')
-#     if 'snapshot' in volume:
-#         if volume.get('volume_type') == 'io1' and 'iops' not in volume:
-#             module.fail_json(msg='io1 volumes must have an iops value set')
-#     if 'ephemeral' in volume:
-#         if 'snapshot' in volume:
-#             module.fail_json(msg='Cannot set both ephemeral and snapshot')
-#
-#     return_object = {}
-#
-#     if 'ephemeral' in volume:
-#         return_object['VirtualName'] = volume.get('ephemeral')
-#
-#     if 'device_name' in volume:
-#         return_object['DeviceName'] = volume.get('device_name')
-#
-#     if 'no_device' in volume:
-#         return_object['NoDevice'] = volume.get('no_device')
-#
-#     if any(key in volume for key in ['snapshot', 'volume_size', 'volume_type', 'delete_on_termination', 'ips', 'encrypted']):
-#         return_object['Ebs'] = {}
-#
-#     if 'snapshot' in volume:
-#         return_object['Ebs']['SnapshotId'] = volume.get('snapshot')
-#
-#     if 'volume_size' in volume:
-#         return_object['Ebs']['VolumeSize'] = int(volume.get('volume_size', 0))
-#
-#     if 'volume_type' in volume:
-#         return_object['Ebs']['VolumeType'] = volume.get('volume_type')
-#
-#     if 'delete_on_termination' in volume:
-#         return_object['Ebs']['DeleteOnTermination'] = volume.get('delete_on_termination', False)
-#
-#     if 'iops' in volume:
-#         return_object['Ebs']['Iops'] = volume.get('iops')
-#
-#     if 'encrypted' in volume:
-#         return_object['Ebs']['Encrypted'] = volume.get('encrypted')
-#
-#     return return_object
+@AWSRetry.backoff(**backoff_params)
+def describe_lt(connection, launch_template):
+    """ Checks for existing launch templates matching the name or id and returns a dict object if found """
+    try:
+        if launch_template['LaunchTemplateName'] is not None:
+            lt = connection.describe_launch_templates(LaunchTemplateNames=[launch_template['LaunchTemplateName']])
+            return lt['LaunchTemplates'][0]
+        elif launch_template['LaunchTemplateId'] is not None:
+            lt = connection.describe_launch_templates(LaunchTemplateIds=[launch_template['LaunchTemplateId']])
+            return lt['LaunchTemplates'][0]
+    except botocore.exceptions.ClientError:
+        return None
+    except botocore.exceptions.BotoCoreError as e:
+        module.fail_json(msg="Failed to describe the launch template", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
 
 
-def create_launch_template_and_versions(connection):
+@AWSRetry.backoff(**backoff_params)
+def describe_lt_version(connection, launch_template, version_number):
+    """ Describes a specific version of a launch template """
+    try:
+        # import pdb; pdb.set_trace();
+        if launch_template['LaunchTemplateName'] is not None:
+            lt = connection.describe_launch_template_versions(LaunchTemplateName=launch_template['LaunchTemplateName'], Versions=[str(version_number)])
+            return lt['LaunchTemplateVersions'][0]
+        elif launch_template['LaunchTemplateId'] is not None:
+            lt = connection.describe_launch_template_versions(LaunchTemplateId=launch_template['LaunchTemplateId'], Versions=[str(version_number)])
+            return lt['LaunchTemplateVersions'][0]
+        else:
+            module.fail_json(msg="Missing launch template name or id")
+    except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError) as e:
+        module.fail_json(msg="Failed to describe launch template version number: %s" % version_number)
+
+
+@AWSRetry.backoff(**backoff_params)
+def delete_lt(connection, launch_template):
+    """ Deletes a launch template and all versions """
+    try:
+        if launch_template['LaunchTemplateName'] is not None:
+            lt = connection.delete_launch_template(LaunchTemplateName=launch_template['LaunchTemplateName'])
+            return lt
+        elif launch_template['LaunchTemplateId'] is not None:
+            lt = connection.delete_launch_template(LaunchTemplateId=launch_template['LaunchTemplateId'])
+            return lt
+        else:
+            module.fail_json(msg="Missing launch template name or id")
+    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+        module.fail_json(msg="Failed to delete the launch template", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
+
+
+@AWSRetry.backoff(**backoff_params)
+def delete_lt_version(connection, launch_template, ):
+    """ Deletes a specific launch template version """
+    try:
+        if launch_template['LaunchTemplateName'] is not None:
+            lt = connection.delete_launch_template_versions(LaunchTemplateName=launch_template['LaunchTemplateName'], Versions=[launch_template['Version']])
+            return lt
+        elif launch_template['LaunchTemplateId'] is not None:
+            lt = connection.delete_launch_template_versions(LaunchTemplateId=launch_template['LaunchTemplateId'], Versions=[launch_template['Version']])
+            return lt
+        else:
+            module.fail_json(msg="Missing launch template name or id")
+    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as e:
+        module.fail_json(msg="Failed to delete the launch template version", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
+
+
+def create_launch_template_or_version(connection):
     launch_template = dict()
     results = dict(
         changed=False,
         results=dict()
     )
-
     name = module.params.get('name')
-
     version_description = module.params.get('version_description')
     ami_id = module.params.get('ami_id')
     instance_type = module.params.get('instance_type')
@@ -529,32 +505,28 @@ def create_launch_template_and_versions(connection):
     if cpu_credits:
         launch_template['LaunchTemplateData']['CreditSpecification'] = {"CpuCredits": cpu_credits}
 
-    lt = describe_launch_templates(connection, name)
-    import pdb; pdb.set_trace();
-    # Create New Launch Template
-    if lt is None:
+    # import pdb; pdb.set_trace();
+
+    lt = describe_lt(connection, launch_template)
+    if lt is None:  # Create New Launch Template
         if launch_template['LaunchTemplateData'] is not None:
-            create_launch_template(connection, **launch_template)
-            lt = describe_launch_templates(connection, name)
+            create_lt(connection, **launch_template)
+            lt = describe_lt(connection, launch_template)
             results['changed'] = True
         else:
             module.fail_json(msg="Launch template data missing.")
-
-
-    # Create new Version for existing Launch Template
-    else:
+    else:   # Create new Version for existing Launch Template
         if (launch_template['LaunchTemplateData'] and launch_template['LaunchTemplateData'] is not None):
         # Diff the existing latest version and our args to ensure idempotence
-            lt_latest_version = describe_launch_template_version(connection, name, lt['LatestVersionNumber'])
+            lt_latest_version = describe_lt_version(connection, launch_template, lt['LatestVersionNumber'])
 
             if lt_latest_version['LaunchTemplateData'] != launch_template['LaunchTemplateData']:
-                create_launch_template_version(connection, **launch_template)
-                lt = describe_launch_templates(connection, name)
+                create_lt_version(connection, **launch_template)
+                lt = describe_lt(connection, launch_template)
                 results['changed'] = True
 
-
-    lt = describe_launch_templates(connection, name)
-    lt_latest_version = describe_launch_template_version(connection, name, lt['LatestVersionNumber'])
+    lt = describe_lt(connection, launch_template)
+    lt_latest_version = describe_lt_version(connection, launch_template, lt['LatestVersionNumber'])
 
     results['results']['id'] = lt['LaunchTemplateId']
     results['results']['name'] = lt['LaunchTemplateName']
@@ -566,165 +538,38 @@ def create_launch_template_and_versions(connection):
         create_time = to_text(lt_latest_version['CreateTime'])
     )
 
-
-
-        # import pdb; pdb.set_trace();
-        # result = dict((k, v) for k, v in lt.items())
-
-        # result = (dict((k, v) for k, v in lt.items() if k not in ['CreateTime']))
-        #
-        # result['CreateTime'] = to_text(lt.get('CreateTime'))
-
-
-
-
-
     return results
 
 
-    # Test if launch template already exists:
+def delete_launch_template_or_version(connection):
+    launch_template = dict()
+    results = dict(
+        changed=False,
+        results=dict()
+    )
+    launch_template['LaunchTemplateName'] = module.params.get('name')
+    launch_template['LaunchTemplateId'] = module.params.get('id')
+    launch_template['Version'] = module.params.get('version')
+    # import pdb; pdb.set_trace();
 
-    # If Not:
-        # Create Launch Tempalte
+    if launch_template['Version'] is not None:
+        lt_version_to_delete = describe_lt_version(connection, launch_template, launch_template['Version'])
+        lt = delete_lt_version(connection, launch_template)
+        results['changed'] = True
+    else:
+        lt = delete_lt(connection, launch_template)
+        results['changed'] = True
 
+    return results
 
-    # Else:
-       # Create launch template version
+def delete_launch_template_version(connection):
+    launch_template = dict()
+    results = dict(
+        changed=False,
+        results=dict()
+    )
 
-
-
-
-
-
-
-
-
-# def create_asg():
-#     try:
-#         lt = conection.create_launch_template("LaunchTemplateName"**launch_template)
-#
-#
-#
-#     vpc_id = module.params.get('vpc_id')
-#     try:
-#         region, ec2_url, aws_connect_kwargs = get_aws_connection_info(module, boto3=True)
-#         ec2_connection = boto3_conn(module, 'client', 'ec2', region, ec2_url, **aws_connect_kwargs)
-#         security_groups = get_ec2_security_group_ids_from_names(module.params.get('security_groups'), ec2_connection, vpc_id=vpc_id, boto3=True)
-#     except botocore.exceptions.ClientError as e:
-#         module.fail_json(msg="Failed to get Security Group IDs", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
-#     except ValueError as e:
-#         module.fail_json(msg="Failed to get Security Group IDs", exception=traceback.format_exc())
-#     user_data = module.params.get('user_data')
-#     user_data_path = module.params.get('user_data_path')
-#     volumes = module.params['volumes']
-#     instance_monitoring = module.params.get('instance_monitoring')
-#     assign_public_ip = module.params.get('assign_public_ip')
-#     instance_profile_name = module.params.get('instance_profile_name')
-#     ebs_optimized = module.params.get('ebs_optimized')
-#     classic_link_vpc_id = module.params.get('classic_link_vpc_id')
-#     classic_link_vpc_security_groups = module.params.get('classic_link_vpc_security_groups')
-#
-#     block_device_mapping = []
-#
-#     convert_list = ['image_id', 'instance_type', 'instance_type', 'instance_id', 'placement_tenancy', 'key_name', 'kernel_id', 'ramdisk_id', 'spot_price']
-#
-#     launch_config = (snake_dict_to_camel_dict(dict((k.capitalize(), str(v)) for k, v in module.params.items() if v is not None and k in convert_list)))
-#
-#     if user_data_path:
-#         try:
-#             with open(user_data_path, 'r') as user_data_file:
-#                 user_data = user_data_file.read()
-#         except IOError as e:
-#             module.fail_json(msg="Failed to open file for reading", exception=traceback.format_exc())
-#
-#     if volumes:
-#         for volume in volumes:
-#             if 'device_name' not in volume:
-#                 module.fail_json(msg='Device name must be set for volume')
-#             # Minimum volume size is 1GB. We'll use volume size explicitly set to 0 to be a signal not to create this volume
-#             if 'volume_size' not in volume or int(volume['volume_size']) > 0:
-#                 block_device_mapping.append(create_block_device_meta(module, volume))
-#
-#     try:
-#         launch_configs = connection.describe_launch_configurations(LaunchConfigurationNames=[name]).get('LaunchConfigurations')
-#     except botocore.exceptions.ClientError as e:
-#         module.fail_json(msg="Failed to describe launch configuration by name", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
-#
-#     changed = False
-#     result = {}
-#
-#     launch_config['LaunchConfigurationName'] = name
-#
-#     if security_groups is not None:
-#         launch_config['SecurityGroups'] = security_groups
-#
-#     if classic_link_vpc_id is not None:
-#         launch_config['ClassicLinkVPCId'] = classic_link_vpc_id
-#
-#     if instance_monitoring is not None:
-#         launch_config['InstanceMonitoring'] = {'Enabled': instance_monitoring}
-#
-#     if classic_link_vpc_security_groups is not None:
-#         launch_config['ClassicLinkVPCSecurityGroups'] = classic_link_vpc_security_groups
-#
-#     if block_device_mapping:
-#         launch_config['BlockDeviceMappings'] = block_device_mapping
-#
-#     if instance_profile_name is not None:
-#         launch_config['IamInstanceProfile'] = instance_profile_name
-#
-#     if assign_public_ip is not None:
-#         launch_config['AssociatePublicIpAddress'] = assign_public_ip
-#
-#     if user_data is not None:
-#         launch_config['UserData'] = user_data
-#
-#     if ebs_optimized is not None:
-#         launch_config['EbsOptimized'] = ebs_optimized
-#
-#     if len(launch_configs) == 0:
-#         try:
-#             connection.create_launch_configuration(**launch_config)
-#             launch_configs = connection.describe_launch_configurations(LaunchConfigurationNames=[name]).get('LaunchConfigurations')
-#             changed = True
-#             if launch_configs:
-#                 launch_config = launch_configs[0]
-#         except botocore.exceptions.ClientError as e:
-#             module.fail_json(msg="Failed to create launch configuration", exception=traceback.format_exc(), **camel_dict_to_snake_dict(e.response))
-#
-#     result = (dict((k, v) for k, v in launch_config.items()
-#                    if k not in ['Connection', 'CreatedTime', 'InstanceMonitoring', 'BlockDeviceMappings']))
-#
-#     result['CreatedTime'] = to_text(launch_config.get('CreatedTime'))
-#
-#     try:
-#         result['InstanceMonitoring'] = module.boolean(launch_config.get('InstanceMonitoring').get('Enabled'))
-#     except AttributeError:
-#         result['InstanceMonitoring'] = False
-#
-#     result['BlockDeviceMappings'] = []
-#
-#     for block_device_mapping in launch_config.get('BlockDeviceMappings', []):
-#         result['BlockDeviceMappings'].append(dict(device_name=block_device_mapping.get('DeviceName'), virtual_name=block_device_mapping.get('VirtualName')))
-#         if block_device_mapping.get('Ebs') is not None:
-#             result['BlockDeviceMappings'][-1]['ebs'] = dict(
-#                 snapshot_id=block_device_mapping.get('Ebs').get('SnapshotId'), volume_size=block_device_mapping.get('Ebs').get('VolumeSize'))
-#
-#     if user_data_path:
-#         result['UserData'] = "hidden"  # Otherwise, we dump binary to the user's terminal
-#
-    # return_object = {
-    #     'Name': result.get('LaunchConfigurationName'),
-    #     'CreatedTime': result.get('CreatedTime'),
-    #     'ImageId': result.get('ImageId'),
-    #     'Arn': result.get('LaunchConfigurationARN'),
-    #     'SecurityGroups': result.get('SecurityGroups'),
-    #     'InstanceType': result.get('InstanceType'),
-    #     'Result': result
-    # }
-    #
-    # module.exit_json(changed=changed, **camel_dict_to_snake_dict(return_object))
-
+    return results
 
 # def delete_launch_config(connection, module):
 #     try:
@@ -744,6 +589,7 @@ def main():
     argument_spec.update(
         dict(
             name=dict(type='str', required=True),
+            id = dict(type='str'),
             state=dict(type='str', default='present'),
             version_description=dict(type='str'),
             ami_id=dict(type='str'),
@@ -752,6 +598,7 @@ def main():
             security_group_ids=dict(type='list'),
             security_groups=dict(type='list'),
             cpu_credits=dict(type='str', allowed_values=['standard', 'unlimited']),
+            version=dict(type='str')
 
             # #TODO: ebs_optimized=dict(type='bool', default=False),
             # #TODO:  iam_instance_profile=dict(
@@ -800,7 +647,9 @@ def main():
     state = module.params.get('state')
 
     if state == 'present':
-        results = create_launch_template_and_versions(connection)
+        results = create_launch_template_or_version(connection)
+    elif state == 'absent':
+        results = delete_launch_template_or_version(connection)
     #TODO: elif state == 'absent':
     #     delete_launch_config(connection, module)
 
